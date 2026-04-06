@@ -1,59 +1,60 @@
 import { useState, useEffect, useRef } from 'react';
 
-// !miniTicker@arr streams 24hr rolling window mini-ticker statistics for all symbols.
-// Ye massive data table ke liye sabse best stream hai.
 const BINANCE_WS_URL = 'wss://stream.binance.com:9443/ws/!miniTicker@arr';
 
 export const useBinanceSocket = (throttleMs = 1000) => {
-    const [data, setData] = useState([]);
+  const [data, setData] = useState([]);
+  const latestDataRef = useRef([]);
+  const historyRef = useRef({}); // Har coin ki last 20 prices store karne ke liye
 
-    // useRef re-renders trigger nahi karta, isliye incoming fast data hum yahan store karenge
-    const latestDataRef = useRef([]);
+  useEffect(() => {
+    const ws = new WebSocket(BINANCE_WS_URL);
 
-    useEffect(() => {
-        const ws = new WebSocket(BINANCE_WS_URL);
+    ws.onopen = () => console.log('🟢 Connected to Binance WebSocket');
+    ws.onmessage = (event) => {
+      latestDataRef.current = JSON.parse(event.data);
+    };
+    ws.onerror = (error) => console.error('🔴 WebSocket Error:', error);
 
-        ws.onopen = () => {
-            console.log('🟢 Connected to Binance WebSocket');
-        };
+    const interval = setInterval(() => {
+      if (latestDataRef.current.length > 0) {
+        const formattedData = latestDataRef.current.map(item => {
+          const symbol = item.s;
+          const currentPrice = Number(item.c);
 
-        ws.onmessage = (event) => {
-            const parsedData = JSON.parse(event.data);
-            // Naye data ko silently Ref mein daal do (UI freeze nahi hoga)
-            latestDataRef.current = parsedData;
-        };
+          // Agar coin ki history nahi hai, toh empty array banao
+          if (!historyRef.current[symbol]) {
+            historyRef.current[symbol] = [];
+          }
 
-        ws.onerror = (error) => {
-            console.error('🔴 WebSocket Error:', error);
-        };
+          const history = historyRef.current[symbol];
+          
+          // Nayi price history mein dalo, aur sirf last 20 points save rakho
+          history.push(currentPrice);
+          if (history.length > 20) {
+            history.shift(); 
+          }
 
-        ws.onclose = () => {
-            console.log('🔴 Disconnected from Binance WebSocket');
-        };
+          return {
+            symbol: symbol,
+            closePrice: currentPrice,
+            openPrice: item.o,
+            highPrice: item.h,
+            lowPrice: item.l,
+            volume: item.v,
+            priceHistory: [...history], // Chart ke liye history array
+          };
+        });
+        
+        setData(formattedData);
+      }
+    }, throttleMs);
 
-        // The Throttle: Har 'throttleMs' (e.g., 1000ms) baad React state ko update karo
-        const interval = setInterval(() => {
-            if (latestDataRef.current.length > 0) {
-                // Map karke data ko thoda clean aur format kar lete hain
-                const formattedData = latestDataRef.current.map(item => ({
-                    symbol: item.s,           // Symbol (e.g., BTCUSDT)
-                    closePrice: item.c,       // Latest price
-                    openPrice: item.o,        // Open price
-                    highPrice: item.h,        // High price
-                    lowPrice: item.l,         // Low price
-                    volume: item.v,           // Volume
-                }));
+    return () => {
+      ws.close();
+      clearInterval(interval);
+    };
+  }, [throttleMs]);
 
-                setData(formattedData);
-            }
-        }, throttleMs);
-
-        // Cleanup function: Jab component unmount ho toh connection close kar do
-        return () => {
-            ws.close();
-            clearInterval(interval);
-        };
-    }, [throttleMs]);
-
-    return data;
+  return data;
 };
